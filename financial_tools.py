@@ -1,26 +1,20 @@
-from langchain.tools import Tool
-import yfinance as yf
-from typing import Dict, Any, Optional, List
-import json
 import logging
-import pandas as pd
-import requests
-from datetime import datetime, timedelta
-import numpy as np
-from functools import wraps
 import time
-import os
+from functools import wraps
+from typing import Any, Dict, List
+
+import pandas as pd
+import yfinance as yf
+from langchain.tools import Tool
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('financial_analysis.log'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("financial_analysis.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
+
 
 def retry_on_exception(retries=3, delay=1):
     def decorator(func):
@@ -33,18 +27,21 @@ def retry_on_exception(retries=3, delay=1):
                     if i == retries - 1:
                         logger.error(f"Failed after {retries} retries: {str(e)}")
                         raise
-                    logger.warning(f"Attempt {i+1} failed: {str(e)}, retrying...")
+                    logger.warning(f"Attempt {i + 1} failed: {str(e)}, retrying...")
                     time.sleep(delay)
             return None
+
         return wrapper
+
     return decorator
+
 
 class FinancialMetricsCalculator:
     @staticmethod
     def calculate_moving_averages(prices: List[float], windows: List[int]) -> Dict[str, List[float]]:
         df = pd.Series(prices)
         return {f"MA{window}": df.rolling(window=window).mean().tolist() for window in windows}
-    
+
     @staticmethod
     def calculate_rsi(prices: List[float], period: int = 14) -> List[float]:
         df = pd.Series(prices)
@@ -54,7 +51,7 @@ class FinancialMetricsCalculator:
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         return rsi.tolist()
-    
+
     @staticmethod
     def calculate_macd(prices: List[float]) -> Dict[str, List[float]]:
         df = pd.Series(prices)
@@ -62,11 +59,8 @@ class FinancialMetricsCalculator:
         exp2 = df.ewm(span=26, adjust=False).mean()
         macd = exp1 - exp2
         signal = macd.ewm(span=9, adjust=False).mean()
-        return {
-            "macd": macd.tolist(),
-            "signal": signal.tolist(),
-            "histogram": (macd - signal).tolist()
-        }
+        return {"macd": macd.tolist(), "signal": signal.tolist(), "histogram": (macd - signal).tolist()}
+
 
 @retry_on_exception()
 def stock_data_tool(args: Dict[str, str]) -> Dict[str, Any]:
@@ -78,20 +72,20 @@ def stock_data_tool(args: Dict[str, str]) -> Dict[str, Any]:
         ticker = args.get("ticker")
         if not ticker:
             raise ValueError("No ticker provided")
-        
+
         stock = yf.Ticker(ticker)
         info = stock.info
         history = stock.history(period="1y")
-        
+
         prices = history["Close"].tolist()
         calculator = FinancialMetricsCalculator()
-        
+
         technical_indicators = {
             "moving_averages": calculator.calculate_moving_averages(prices, [20, 50, 200]),
             "rsi": calculator.calculate_rsi(prices),
-            "macd": calculator.calculate_macd(prices)
+            "macd": calculator.calculate_macd(prices),
         }
-        
+
         result = {
             "current_price": info.get("currentPrice"),
             "market_cap": info.get("marketCap"),
@@ -103,16 +97,17 @@ def stock_data_tool(args: Dict[str, str]) -> Dict[str, Any]:
             "52_week_low": info.get("fiftyTwoWeekLow"),
             "price_history": prices,
             "volume_history": history["Volume"].tolist(),
-            "dates": history.index.strftime('%Y-%m-%d').tolist(),
-            "technical_indicators": technical_indicators
+            "dates": history.index.strftime("%Y-%m-%d").tolist(),
+            "technical_indicators": technical_indicators,
         }
-        
+
         logger.info(f"Successfully fetched stock data for {ticker}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error fetching stock data: {str(e)}")
         raise
+
 
 @retry_on_exception()
 def financial_metrics_tool(args: Dict[str, str]) -> Dict[str, Any]:
@@ -124,15 +119,15 @@ def financial_metrics_tool(args: Dict[str, str]) -> Dict[str, Any]:
         ticker = args.get("ticker")
         if not ticker:
             raise ValueError("No ticker provided")
-        
+
         stock = yf.Ticker(ticker)
         info = stock.info
-        
+
         # Get financial statements
         balance_sheet = stock.balance_sheet
         income_stmt = stock.income_stmt
         cash_flow = stock.cashflow
-        
+
         result = {
             "profitability": {
                 "gross_margin": info.get("grossMargins"),
@@ -140,7 +135,7 @@ def financial_metrics_tool(args: Dict[str, str]) -> Dict[str, Any]:
                 "profit_margin": info.get("profitMargins"),
                 "roe": info.get("returnOnEquity"),
                 "roa": info.get("returnOnAssets"),
-                "roic": info.get("returnOnCapital")
+                "roic": info.get("returnOnCapital"),
             },
             "valuation": {
                 "pe_ratio": info.get("trailingPE"),
@@ -148,13 +143,13 @@ def financial_metrics_tool(args: Dict[str, str]) -> Dict[str, Any]:
                 "price_to_book": info.get("priceToBook"),
                 "price_to_sales": info.get("priceToSalesTrailing12Months"),
                 "ev_to_ebitda": info.get("enterpriseToEbitda"),
-                "peg_ratio": info.get("pegRatio")
+                "peg_ratio": info.get("pegRatio"),
             },
             "growth": {
                 "revenue_growth": info.get("revenueGrowth"),
                 "earnings_growth": info.get("earningsGrowth"),
                 "earnings_quarterly_growth": info.get("earningsQuarterlyGrowth"),
-                "free_cashflow_growth": calculate_growth_rate(cash_flow, "Free Cash Flow")
+                "free_cashflow_growth": calculate_growth_rate(cash_flow, "Free Cash Flow"),
             },
             "financial_health": {
                 "current_ratio": info.get("currentRatio"),
@@ -162,21 +157,22 @@ def financial_metrics_tool(args: Dict[str, str]) -> Dict[str, Any]:
                 "quick_ratio": info.get("quickRatio"),
                 "total_debt": info.get("totalDebt"),
                 "total_cash": info.get("totalCash"),
-                "interest_coverage": calculate_interest_coverage(income_stmt)
+                "interest_coverage": calculate_interest_coverage(income_stmt),
             },
             "efficiency": {
                 "asset_turnover": calculate_asset_turnover(income_stmt, balance_sheet),
                 "inventory_turnover": info.get("inventoryTurnover"),
-                "receivables_turnover": calculate_receivables_turnover(income_stmt, balance_sheet)
-            }
+                "receivables_turnover": calculate_receivables_turnover(income_stmt, balance_sheet),
+            },
         }
-        
+
         logger.info(f"Successfully calculated financial metrics for {ticker}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error calculating financial metrics: {str(e)}")
         raise
+
 
 def calculate_growth_rate(df: pd.DataFrame, column: str) -> float:
     """Calculate year-over-year growth rate"""
@@ -185,6 +181,7 @@ def calculate_growth_rate(df: pd.DataFrame, column: str) -> float:
     latest = df[column].iloc[0]
     previous = df[column].iloc[4] if len(df) > 4 else df[column].iloc[-1]
     return ((latest - previous) / abs(previous)) if previous != 0 else None
+
 
 def calculate_interest_coverage(income_stmt: pd.DataFrame) -> float:
     """Calculate interest coverage ratio"""
@@ -197,6 +194,7 @@ def calculate_interest_coverage(income_stmt: pd.DataFrame) -> float:
     except:
         return None
 
+
 def calculate_asset_turnover(income_stmt: pd.DataFrame, balance_sheet: pd.DataFrame) -> float:
     """Calculate asset turnover ratio"""
     if income_stmt.empty or balance_sheet.empty:
@@ -208,25 +206,29 @@ def calculate_asset_turnover(income_stmt: pd.DataFrame, balance_sheet: pd.DataFr
     except:
         return None
 
+
 def calculate_receivables_turnover(income_stmt: pd.DataFrame, balance_sheet: pd.DataFrame) -> float:
     """Calculate receivables turnover ratio"""
     if income_stmt.empty or balance_sheet.empty:
         return None
     try:
         revenue = income_stmt.loc["Total Revenue"].iloc[0]
-        avg_receivables = (balance_sheet.loc["Net Receivables"].iloc[0] + balance_sheet.loc["Net Receivables"].iloc[1]) / 2
+        avg_receivables = (
+            balance_sheet.loc["Net Receivables"].iloc[0] + balance_sheet.loc["Net Receivables"].iloc[1]
+        ) / 2
         return revenue / avg_receivables if avg_receivables != 0 else None
     except:
         return None
 
+
 stock_data_tool_instance = Tool(
     name="stock_data_tool",
     func=stock_data_tool,
-    description="Fetches comprehensive stock data including technical indicators"
+    description="Fetches comprehensive stock data including technical indicators",
 )
 
 financial_metrics_tool_instance = Tool(
     name="financial_metrics_tool",
     func=financial_metrics_tool,
-    description="Calculates detailed financial metrics with comprehensive analysis"
-) 
+    description="Calculates detailed financial metrics with comprehensive analysis",
+)

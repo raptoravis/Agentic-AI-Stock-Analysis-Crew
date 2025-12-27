@@ -1,46 +1,42 @@
 # Fix for ChromaDB SQLite version issue
-import sys
-import os
-__import__('pysqlite3')
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
-from crewai import Agent, Task, Crew, Process, LLM
-from crewai.tools import BaseTool
-from langchain_community.tools import DuckDuckGoSearchRun
-from financial_tools import stock_data_tool, financial_metrics_tool
-from pydantic import Field
-from typing import Type
-from dotenv import load_dotenv
-from typing import Any, Dict, List, Optional
-import logging
 import json
-from datetime import datetime
-import pandas as pd
-import numpy as np
+import logging
+import os
 import queue
-import threading
 import time
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+
+# __import__('pysqlite3')
+# sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+from crewai import LLM, Agent, Crew, Process, Task
+from crewai.tools import BaseTool
+from dotenv import load_dotenv
+from langchain_community.tools import DuckDuckGoSearchRun
 from litellm import APIConnectionError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from financial_tools import financial_metrics_tool, stock_data_tool
 
 load_dotenv()
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('market_analysis.log'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("market_analysis.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
+
 
 # Custom CrewAI Tools
 class SearchTool(BaseTool):
     name: str = "Search"
     description: str = "Search the internet for recent information. Input should be a simple search query string."
-    
+
     def _run(self, query: str) -> str:
         try:
             search = DuckDuckGoSearchRun()
@@ -49,10 +45,13 @@ class SearchTool(BaseTool):
             logger.error(f"Search failed: {str(e)}")
             return f"Search failed: {str(e)}"
 
+
 class StockDataTool(BaseTool):
     name: str = "StockData"
-    description: str = "Get comprehensive stock data including technical indicators. Input should be a stock ticker symbol."
-    
+    description: str = (
+        "Get comprehensive stock data including technical indicators. Input should be a stock ticker symbol."
+    )
+
     def _run(self, ticker: str) -> str:
         try:
             result = stock_data_tool({"ticker": ticker})
@@ -61,10 +60,11 @@ class StockDataTool(BaseTool):
             logger.error(f"Failed to fetch stock data: {str(e)}")
             return json.dumps({"error": f"Failed to fetch stock data: {str(e)}"})
 
+
 class FinancialMetricsTool(BaseTool):
     name: str = "FinancialMetrics"
     description: str = "Get detailed financial metrics and analysis. Input should be a stock ticker symbol."
-    
+
     def _run(self, ticker: str) -> str:
         try:
             result = financial_metrics_tool({"ticker": ticker})
@@ -73,29 +73,31 @@ class FinancialMetricsTool(BaseTool):
             logger.error(f"Failed to fetch financial metrics: {str(e)}")
             return json.dumps({"error": f"Failed to fetch financial metrics: {str(e)}"})
 
+
 # LLM Provider configurations
 LLM_PROVIDERS = {
     "openai": {
         "models": ["gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"],
         "api_key_env": "OPENAI_API_KEY",
-        "default_model": "gpt-4o-mini"
+        "default_model": "gpt-4o-mini",
     },
     "anthropic": {
         "models": ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"],
         "api_key_env": "ANTHROPIC_API_KEY",
-        "default_model": "claude-3-haiku-20240307"
+        "default_model": "claude-3-haiku-20240307",
     },
     "gemini": {
         "models": ["gemini-1.5-pro-latest", "gemini-1.5-flash"],
         "api_key_env": "GEMINI_API_KEY",
-        "default_model": "gemini-1.5-flash"
+        "default_model": "gemini-1.5-flash",
     },
     "ollama": {
         "models": ["llama3.2", "mistral", "codellama", "llama2"],
         "api_key_env": None,  # Ollama doesn't need API key
-        "default_model": "llama3.2"
-    }
+        "default_model": "llama3.2",
+    },
 }
+
 
 def get_available_providers():
     """Get list of available providers based on API keys"""
@@ -105,7 +107,8 @@ def get_available_providers():
             # Check if Ollama server is running
             try:
                 import requests
-                ollama_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+
+                ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
                 response = requests.get(f"{ollama_url}/api/tags", timeout=2)
                 if response.status_code == 200:
                     available.append(provider)
@@ -117,10 +120,11 @@ def get_available_providers():
                 available.append(provider)
     return available
 
+
 def parse_model_provider(model_provider_str):
     """Parse model provider string like 'openai/gpt-4' into provider and model"""
-    if '/' in model_provider_str:
-        provider, model = model_provider_str.split('/', 1)
+    if "/" in model_provider_str:
+        provider, model = model_provider_str.split("/", 1)
         return provider, model
     else:
         # Default to provider name only, use default model
@@ -129,26 +133,27 @@ def parse_model_provider(model_provider_str):
             return provider, LLM_PROVIDERS[provider]["default_model"]
         return "openai", "gpt-4o-mini"
 
+
 # retry decorator for LLM initialization
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10),
     retry=retry_if_exception_type(APIConnectionError),
-    reraise=True
+    reraise=True,
 )
 def initialize_llm(model_provider=None):
     """Initialize LLM with retry mechanism and multi-provider support"""
     if model_provider is None:
-        model_provider = os.getenv('MODEL_PROVIDER', 'openai/gpt-4o-mini')
-    
+        model_provider = os.getenv("MODEL_PROVIDER", "openai/gpt-4o-mini")
+
     provider, model = parse_model_provider(model_provider)
-    
+
     # Validate provider
     if provider not in LLM_PROVIDERS:
         raise ValueError(f"Unsupported provider: {provider}. Available: {list(LLM_PROVIDERS.keys())}")
-    
+
     provider_config = LLM_PROVIDERS[provider]
-    
+
     # Check API key (except for Ollama)
     if provider != "ollama":
         api_key = os.getenv(provider_config["api_key_env"])
@@ -158,34 +163,37 @@ def initialize_llm(model_provider=None):
                 suggestion = f" Available providers with API keys: {', '.join(available_providers)}"
             else:
                 suggestion = " Please set at least one API key in your .env file."
-            raise ValueError(f"Missing {provider.upper()} API key. Please set {provider_config['api_key_env']} environment variable.{suggestion}")
+            raise ValueError(
+                f"Missing {provider.upper()} API key. Please set {provider_config['api_key_env']} environment variable.{suggestion}"
+            )
     else:
         # For Ollama, check if server is accessible
         try:
             import requests
-            ollama_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+
+            ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
             response = requests.get(f"{ollama_url}/api/tags", timeout=5)
             if response.status_code != 200:
                 raise Exception("Ollama server not responding")
         except Exception as e:
-            raise ValueError(f"Ollama server not accessible at {ollama_url}. Please start Ollama server first. Error: {str(e)}")
-    
+            raise ValueError(
+                f"Ollama server not accessible at {ollama_url}. Please start Ollama server first. Error: {str(e)}"
+            )
+
     # Construct model string for CrewAI
     if provider == "ollama":
         model_string = f"ollama/{model}"
         # Set Ollama base URL if provided
-        ollama_base_url = os.getenv('OLLAMA_BASE_URL')
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL")
         if ollama_base_url:
-            os.environ['OLLAMA_HOST'] = ollama_base_url
+            os.environ["OLLAMA_HOST"] = ollama_base_url
     else:
         model_string = f"{provider}/{model}"
-    
+
     logger.info(f"Initializing {provider.upper()} LLM with model: {model}")
-    
-    return LLM(
-        model=model_string,
-        temperature=0.7
-    )
+
+    return LLM(model=model_string, temperature=0.7)
+
 
 # Update the LLM initialization with error handling
 logger.info("Initializing LLM...")
@@ -202,8 +210,10 @@ except Exception as e:
 # Global message queue for agent updates
 agent_messages = queue.Queue()
 
+
 class AgentCallback:
     """Callback handler for agent progress updates"""
+
     def __init__(self, agent_name: str):
         self.agent_name = agent_name
 
@@ -218,16 +228,14 @@ class AgentCallback:
 
     def _add_message(self, message: str, status: str, result: Any = None):
         timestamp = datetime.now().isoformat()
-        agent_messages.put({
-            "timestamp": timestamp,
-            "agent": self.agent_name,
-            "message": message,
-            "status": status,
-            "result": result
-        })
+        agent_messages.put(
+            {"timestamp": timestamp, "agent": self.agent_name, "message": message, "status": status, "result": result}
+        )
+
 
 class EnhancedAgent(Agent):
     """Enhanced Agent class with progress tracking and retry mechanism"""
+
     def __init__(self, role: str, goal: str, backstory: str, tools: List[BaseTool], llm: Any, verbose: bool = True):
         super().__init__(role=role, goal=goal, backstory=backstory, tools=tools, llm=llm, verbose=verbose)
         self._callback = AgentCallback(role)
@@ -236,16 +244,16 @@ class EnhancedAgent(Agent):
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type(APIConnectionError),
-        reraise=True
+        reraise=True,
     )
     def execute_task(self, task: Task, context: Optional[Dict[str, Any]] = None, **kwargs) -> str:
         """Execute a task with progress tracking and retry mechanism
-        
+
         Args:
             task: The task to execute
             context: Optional context dictionary for the task
             **kwargs: Additional keyword arguments
-            
+
         Returns:
             str: The result of the task execution
         """
@@ -255,7 +263,7 @@ class EnhancedAgent(Agent):
             time.sleep(2)
             self._callback.on_progress("Analyzing data...")
             time.sleep(1)
-            
+
             # Call parent's execute_task with proper arguments
             result = super().execute_task(task=task, context=context)
             self._callback.on_complete(result)
@@ -264,40 +272,46 @@ class EnhancedAgent(Agent):
             self._callback.on_progress(f"Error: {str(e)}")
             raise
 
+
 class RiskManager:
     @staticmethod
     def calculate_volatility(prices: List[float]) -> float:
         """Calculate historical volatility"""
         returns = pd.Series(prices).pct_change().dropna()
         return returns.std() * np.sqrt(252)  # Annualized volatility
-    
+
     @staticmethod
     def calculate_var(prices: List[float], confidence_level: float = 0.95) -> float:
         """Calculate Value at Risk"""
         returns = pd.Series(prices).pct_change().dropna()
         return np.percentile(returns, (1 - confidence_level) * 100)
-    
+
     @staticmethod
     def calculate_sharpe_ratio(prices: List[float], risk_free_rate: float = 0.05) -> float:
         """Calculate Sharpe Ratio"""
         returns = pd.Series(prices).pct_change().dropna()
-        excess_returns = returns - risk_free_rate/252
+        excess_returns = returns - risk_free_rate / 252
         return np.sqrt(252) * excess_returns.mean() / returns.std()
-    
+
     @staticmethod
     def assess_market_risk(market_data: Dict[str, Any]) -> Dict[str, Any]:
         """Comprehensive market risk assessment"""
         prices = market_data.get("price_history", [])
         if not prices:
             return {"error": "Insufficient price data"}
-        
+
         return {
             "volatility": RiskManager.calculate_volatility(prices),
             "value_at_risk": RiskManager.calculate_var(prices),
             "sharpe_ratio": RiskManager.calculate_sharpe_ratio(prices),
             "beta": market_data.get("beta"),
-            "risk_assessment": "high" if RiskManager.calculate_volatility(prices) > 0.3 else "medium" if RiskManager.calculate_volatility(prices) > 0.15 else "low"
+            "risk_assessment": "high"
+            if RiskManager.calculate_volatility(prices) > 0.3
+            else "medium"
+            if RiskManager.calculate_volatility(prices) > 0.15
+            else "low",
         }
+
 
 class MarketAnalysisCrew:
     def __init__(self, model_provider=None):
@@ -315,10 +329,12 @@ class MarketAnalysisCrew:
                 logger.info(f"Using available provider: {model_string}")
                 self.llm = initialize_llm(model_string)
             else:
-                raise ValueError("No LLM providers available. Please configure at least one API key or start Ollama server.")
+                raise ValueError(
+                    "No LLM providers available. Please configure at least one API key or start Ollama server."
+                )
         else:
             self.llm = llm
-            
+
         self._init_tools()
         self.risk_manager = RiskManager()
         self.messages = []
@@ -328,65 +344,65 @@ class MarketAnalysisCrew:
         self.tools = {
             "search": SearchTool(),
             "stock_data": StockDataTool(),
-            "financial_metrics": FinancialMetricsTool()
+            "financial_metrics": FinancialMetricsTool(),
         }
 
     def create_agents(self) -> List[EnhancedAgent]:
         logger.info("Creating specialized agents")
-        
+
         market_researcher = EnhancedAgent(
-            role='Market Intelligence Officer',
-            goal='Provide actionable market research and competitive analysis',
+            role="Market Intelligence Officer",
+            goal="Provide actionable market research and competitive analysis",
             backstory="""Expert market researcher with over 15 years of experience in industry analysis.
             Specializes in identifying market opportunities, competitive advantages, and potential risks.
             Known for combining quantitative and qualitative analysis to form comprehensive market views.""",
             tools=[self.tools["search"], self.tools["stock_data"]],
             llm=self.llm,
-            verbose=True
+            verbose=True,
         )
 
         technical_analyst = EnhancedAgent(
-            role='Technical Analysis Specialist',
-            goal='Provide sophisticated technical analysis and precise price targets',
+            role="Technical Analysis Specialist",
+            goal="Provide sophisticated technical analysis and precise price targets",
             backstory="""Certified Technical Analyst with expertise in advanced pattern recognition and momentum analysis.
             Masters multiple timeframe analysis and combines various technical indicators for high-probability setups.
             Specializes in risk management and position sizing based on technical levels.""",
             tools=[self.tools["stock_data"]],
             llm=self.llm,
-            verbose=True
+            verbose=True,
         )
 
         fundamental_analyst = EnhancedAgent(
-            role='Fundamental Analysis Expert',
-            goal='Conduct deep fundamental analysis and accurate valuation assessment',
+            role="Fundamental Analysis Expert",
+            goal="Conduct deep fundamental analysis and accurate valuation assessment",
             backstory="""CFA charterholder with extensive experience in equity research and valuation.
             Expert in financial statement analysis, industry comparison, and intrinsic value calculation.
             Specializes in identifying companies with strong competitive advantages and growth potential.""",
             tools=[self.tools["stock_data"], self.tools["financial_metrics"]],
             llm=self.llm,
-            verbose=True
+            verbose=True,
         )
 
         risk_analyst = EnhancedAgent(
-            role='Risk Management Specialist',
-            goal='Assess and quantify investment risks',
+            role="Risk Management Specialist",
+            goal="Assess and quantify investment risks",
             backstory="""Risk management expert with background in quantitative finance.
             Specializes in portfolio risk assessment, volatility analysis, and risk-adjusted returns.
             Expert in using various risk metrics and stress testing scenarios.""",
             tools=[self.tools["stock_data"], self.tools["financial_metrics"]],
             llm=self.llm,
-            verbose=True
+            verbose=True,
         )
 
         strategy_expert = EnhancedAgent(
-            role='Portfolio Strategy Expert',
-            goal='Synthesize all analyses into actionable investment recommendations',
+            role="Portfolio Strategy Expert",
+            goal="Synthesize all analyses into actionable investment recommendations",
             backstory="""Senior Portfolio Manager with 20+ years of investment experience.
             Expert in developing comprehensive investment strategies that balance risk and reward.
             Specializes in portfolio optimization and risk-adjusted position sizing.""",
             tools=[self.tools["stock_data"]],
             llm=self.llm,
-            verbose=True
+            verbose=True,
         )
 
         return [market_researcher, technical_analyst, fundamental_analyst, risk_analyst, strategy_expert]
@@ -440,7 +456,7 @@ class MarketAnalysisCrew:
                     "governance": "Corporate governance assessment"
                 }
             }""",
-            agent=market_researcher
+            agent=market_researcher,
         )
 
         technical_analysis_task = Task(
@@ -484,7 +500,7 @@ class MarketAnalysisCrew:
                     "position_size": "Recommended position sizing"
                 }
             }""",
-            agent=technical_analyst
+            agent=technical_analyst,
         )
 
         fundamental_analysis_task = Task(
@@ -532,7 +548,7 @@ class MarketAnalysisCrew:
                     "industry_position": "Competitive position strength"
                 }
             }""",
-            agent=fundamental_analyst
+            agent=fundamental_analyst,
         )
 
         risk_analysis_task = Task(
@@ -574,7 +590,7 @@ class MarketAnalysisCrew:
                     "monitoring": ["Key risk indicators to monitor"]
                 }
             }""",
-            agent=risk_analyst
+            agent=risk_analyst,
         )
 
         strategy_task = Task(
@@ -623,10 +639,16 @@ class MarketAnalysisCrew:
                     "risk_contribution": "Risk contribution assessment"
                 }
             }""",
-            agent=strategy_expert
+            agent=strategy_expert,
         )
 
-        return [market_research_task, technical_analysis_task, fundamental_analysis_task, risk_analysis_task, strategy_task]
+        return [
+            market_research_task,
+            technical_analysis_task,
+            fundamental_analysis_task,
+            risk_analysis_task,
+            strategy_task,
+        ]
 
     def analyze_stock(self, ticker: str) -> Dict[str, Any]:
         """
@@ -643,7 +665,7 @@ class MarketAnalysisCrew:
                     "ticker": ticker,
                     "timestamp": datetime.now().isoformat(),
                     "status": "failed",
-                    "reason": "missing_api_key"
+                    "reason": "missing_api_key",
                 }
 
             while not agent_messages.empty():
@@ -651,30 +673,25 @@ class MarketAnalysisCrew:
 
             agents = self.create_agents()
             tasks = self.create_tasks(ticker, agents)
-            
-            crew = Crew(
-                agents=agents,
-                tasks=tasks,
-                process=Process.sequential,
-                verbose=True
-            )
-            
+
+            crew = Crew(agents=agents, tasks=tasks, process=Process.sequential, verbose=True)
+
             result = crew.kickoff()
-            
+
             # Parse and structure results
             analysis_results = self._parse_results(result)
-            
+
             # Add risk metrics using the tool's _run method
             stock_data_str = self.tools["stock_data"]._run(ticker)
             stock_data = json.loads(stock_data_str)
             if "error" not in stock_data:
                 risk_metrics = self.risk_manager.assess_market_risk(stock_data)
                 analysis_results["risk_metrics"] = risk_metrics
-            
+
             logger.info(f"Successfully completed analysis for {ticker}")
-            
+
             return analysis_results
-            
+
         except ValueError as e:
             error_msg = f"Configuration error: {str(e)}"
             logger.error(error_msg)
@@ -683,7 +700,7 @@ class MarketAnalysisCrew:
                 "ticker": ticker,
                 "timestamp": datetime.now().isoformat(),
                 "status": "failed",
-                "reason": "configuration_error"
+                "reason": "configuration_error",
             }
         except Exception as e:
             error_msg = f"Error during stock analysis: {str(e)}"
@@ -693,7 +710,7 @@ class MarketAnalysisCrew:
                 "ticker": ticker,
                 "timestamp": datetime.now().isoformat(),
                 "status": "failed",
-                "reason": "analysis_error"
+                "reason": "analysis_error",
             }
 
     def _parse_results(self, result: str) -> Dict[str, Any]:
@@ -703,7 +720,4 @@ class MarketAnalysisCrew:
             return json.loads(result)
         except:
             # If not JSON, return as structured text
-            return {
-                "raw_analysis": result,
-                "timestamp": datetime.now().isoformat()
-            } 
+            return {"raw_analysis": result, "timestamp": datetime.now().isoformat()}
