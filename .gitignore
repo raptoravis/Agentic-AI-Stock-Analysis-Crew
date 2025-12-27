@@ -28,8 +28,6 @@ wheels/
 # Logs
 *.log
 logs/
-market_analysis.log
-financial_analysis.log
 
 # IDE
 .idea/
@@ -57,3 +55,6 @@ htmlcov/
 .tox/
 nosetests.xml
 coverage.xml
+
+financial_analysis.log
+market_analysis.log

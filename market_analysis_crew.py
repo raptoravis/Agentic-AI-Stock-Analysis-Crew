@@ -3,9 +3,8 @@ import json
 import logging
 import os
 import queue
-import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -16,7 +15,6 @@ from crewai import LLM, Agent, Crew, Process, Task
 from crewai.tools import BaseTool
 from dotenv import load_dotenv
 from langchain_community.tools import DuckDuckGoSearchRun
-from litellm import APIConnectionError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from financial_tools import financial_metrics_tool, stock_data_tool
@@ -164,7 +162,7 @@ def parse_model_provider(model_provider_str):
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=retry_if_exception_type(APIConnectionError),
+    retry=retry_if_exception_type(Exception),
     reraise=True,
 )
 def initialize_llm(model_provider=None):
@@ -223,7 +221,7 @@ def initialize_llm(model_provider=None):
         # Set DashScope base URL if provided
         dashscope_base_url = os.getenv("DASHSCOPE_BASE_URL")
         if dashscope_base_url:
-            os.environ["DASHSCOPE_BASE_URL"] = dashscope_base_url.replace('"', '')  # Remove quotes if present
+            os.environ["DASHSCOPE_BASE_URL"] = dashscope_base_url.replace('"', "")  # Remove quotes if present
     else:
         model_string = f"{provider}/{model}"
 
@@ -246,68 +244,6 @@ except Exception as e:
 
 # Global message queue for agent updates
 agent_messages = queue.Queue()
-
-
-class AgentCallback:
-    """Callback handler for agent progress updates"""
-
-    def __init__(self, agent_name: str):
-        self.agent_name = agent_name
-
-    def on_start(self, task: str):
-        self._add_message(f"Starting task: {task}", "start")
-
-    def on_progress(self, message: str):
-        self._add_message(message, "progress")
-
-    def on_complete(self, result: Any):
-        self._add_message("Task completed", "complete", result)
-
-    def _add_message(self, message: str, status: str, result: Any = None):
-        timestamp = datetime.now().isoformat()
-        agent_messages.put(
-            {"timestamp": timestamp, "agent": self.agent_name, "message": message, "status": status, "result": result}
-        )
-
-
-class EnhancedAgent(Agent):
-    """Enhanced Agent class with progress tracking and retry mechanism"""
-
-    def __init__(self, role: str, goal: str, backstory: str, tools: List[BaseTool], llm: Any, verbose: bool = True):
-        super().__init__(role=role, goal=goal, backstory=backstory, tools=tools, llm=llm, verbose=verbose)
-        self._callback = AgentCallback(role)
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type(APIConnectionError),
-        reraise=True,
-    )
-    def execute_task(self, task: Task, context: Optional[Dict[str, Any]] = None, **kwargs) -> str:
-        """Execute a task with progress tracking and retry mechanism
-
-        Args:
-            task: The task to execute
-            context: Optional context dictionary for the task
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            str: The result of the task execution
-        """
-        self._callback.on_start(task.description)
-        try:
-            # Simulate thinking/processing time
-            time.sleep(2)
-            self._callback.on_progress("Analyzing data...")
-            time.sleep(1)
-
-            # Call parent's execute_task with proper arguments
-            result = super().execute_task(task=task, context=context)
-            self._callback.on_complete(result)
-            return result
-        except Exception as e:
-            self._callback.on_progress(f"Error: {str(e)}")
-            raise
 
 
 class RiskManager:
@@ -384,10 +320,10 @@ class MarketAnalysisCrew:
             "financial_metrics": FinancialMetricsTool(),
         }
 
-    def create_agents(self) -> List[EnhancedAgent]:
+    def create_agents(self) -> List[Agent]:
         logger.info("Creating specialized agents")
 
-        market_researcher = EnhancedAgent(
+        market_researcher = Agent(
             role="Market Intelligence Officer",
             goal="Provide actionable market research and competitive analysis",
             backstory="""Expert market researcher with over 15 years of experience in industry analysis.
@@ -398,7 +334,7 @@ class MarketAnalysisCrew:
             verbose=True,
         )
 
-        technical_analyst = EnhancedAgent(
+        technical_analyst = Agent(
             role="Technical Analysis Specialist",
             goal="Provide sophisticated technical analysis and precise price targets",
             backstory="""Certified Technical Analyst with expertise in advanced pattern recognition and momentum analysis.
@@ -409,7 +345,7 @@ class MarketAnalysisCrew:
             verbose=True,
         )
 
-        fundamental_analyst = EnhancedAgent(
+        fundamental_analyst = Agent(
             role="Fundamental Analysis Expert",
             goal="Conduct deep fundamental analysis and accurate valuation assessment",
             backstory="""CFA charterholder with extensive experience in equity research and valuation.
@@ -420,7 +356,7 @@ class MarketAnalysisCrew:
             verbose=True,
         )
 
-        risk_analyst = EnhancedAgent(
+        risk_analyst = Agent(
             role="Risk Management Specialist",
             goal="Assess and quantify investment risks",
             backstory="""Risk management expert with background in quantitative finance.
@@ -431,7 +367,7 @@ class MarketAnalysisCrew:
             verbose=True,
         )
 
-        strategy_expert = EnhancedAgent(
+        strategy_expert = Agent(
             role="Portfolio Strategy Expert",
             goal="Synthesize all analyses into actionable investment recommendations",
             backstory="""Senior Portfolio Manager with 20+ years of investment experience.
@@ -451,7 +387,7 @@ class MarketAnalysisCrew:
             messages.append(agent_messages.get())
         return messages
 
-    def create_tasks(self, ticker: str, agents: List[EnhancedAgent]) -> List[Task]:
+    def create_tasks(self, ticker: str, agents: List[Agent]) -> List[Task]:
         logger.info(f"Creating analysis tasks for ticker: {ticker}")
         [market_researcher, technical_analyst, fundamental_analyst, risk_analyst, strategy_expert] = agents
 
