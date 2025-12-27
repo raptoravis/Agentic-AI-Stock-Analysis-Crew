@@ -26,6 +26,8 @@ dependencies = [
     "unstructured",
     "jq",
     "duckduckgo-search",
+    "litellm>=1.40.0",
+    "fastapi>=0.100.0",
     #"pysqlite3-binary",
 ]
 

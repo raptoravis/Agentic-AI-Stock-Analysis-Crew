@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 import pandas as pd
 import yfinance as yf
-from langchain.tools import Tool
+from langchain_core.tools import Tool
 
 # Configure logging
 logging.basicConfig(

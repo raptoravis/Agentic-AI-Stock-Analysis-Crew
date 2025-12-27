@@ -21,6 +21,22 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from financial_tools import financial_metrics_tool, stock_data_tool
 
+# Disable crewAI telemetry to prevent signal handler registration in non-main thread
+os.environ["CREWAI_TELEMETRY_ENABLED"] = "False"
+
+# Import telemetry module and patch the signal handler to prevent the error
+try:
+    from crewai.telemetry.telemetry import Telemetry
+
+    # Replace the signal handler registration method with a no-op function
+    def _dummy_register_signal_handler(self):
+        pass
+
+    Telemetry._register_signal_handler = _dummy_register_signal_handler
+except ImportError:
+    # If telemetry module is not available, continue without patching
+    pass
+
 load_dotenv()
 
 # Configure logging
@@ -91,6 +107,11 @@ LLM_PROVIDERS = {
         "api_key_env": "GEMINI_API_KEY",
         "default_model": "gemini-1.5-flash",
     },
+    "dashscope": {
+        "models": ["qwen3-coder-plus", "qwen-max", "qwen-plus", "qwen-turbo"],
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "default_model": "qwen3-coder-plus",
+    },
     "ollama": {
         "models": ["llama3.2", "mistral", "codellama", "llama2"],
         "api_key_env": None,  # Ollama doesn't need API key
@@ -114,6 +135,11 @@ def get_available_providers():
                     available.append(provider)
             except:
                 pass
+        elif provider == "dashscope":
+            # Check if DashScope API key is set and not a placeholder
+            api_key = os.getenv(config["api_key_env"])
+            if api_key and api_key != "sk-your-dashscope-api-key-here":
+                available.append(provider)
         else:
             api_key = os.getenv(config["api_key_env"])
             if api_key and api_key != f"your_{provider}_api_key_here":
@@ -157,7 +183,11 @@ def initialize_llm(model_provider=None):
     # Check API key (except for Ollama)
     if provider != "ollama":
         api_key = os.getenv(provider_config["api_key_env"])
-        if not api_key or api_key == f"your_{provider}_api_key_here":
+        placeholder_key = f"your_{provider}_api_key_here"
+        if provider == "dashscope":
+            placeholder_key = "sk-your-dashscope-api-key-here"
+
+        if not api_key or api_key == placeholder_key:
             available_providers = get_available_providers()
             if available_providers:
                 suggestion = f" Available providers with API keys: {', '.join(available_providers)}"
@@ -187,6 +217,13 @@ def initialize_llm(model_provider=None):
         ollama_base_url = os.getenv("OLLAMA_BASE_URL")
         if ollama_base_url:
             os.environ["OLLAMA_HOST"] = ollama_base_url
+    elif provider == "dashscope":
+        # For DashScope, use the model name directly or with dashscope prefix
+        model_string = f"dashscope/{model}"
+        # Set DashScope base URL if provided
+        dashscope_base_url = os.getenv("DASHSCOPE_BASE_URL")
+        if dashscope_base_url:
+            os.environ["DASHSCOPE_BASE_URL"] = dashscope_base_url.replace('"', '')  # Remove quotes if present
     else:
         model_string = f"{provider}/{model}"
 

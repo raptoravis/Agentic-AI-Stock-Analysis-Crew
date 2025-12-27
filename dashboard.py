@@ -3,6 +3,9 @@
 # sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 import json
+
+# Disable crewAI telemetry to prevent signal handler registration in non-main thread
+import os
 import time
 from datetime import datetime
 from typing import Any
@@ -11,6 +14,21 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
+
+os.environ["CREWAI_TELEMETRY_ENABLED"] = "False"
+
+# Import and patch telemetry to prevent signal handler registration
+try:
+    from crewai.telemetry.telemetry import Telemetry
+
+    # Replace the signal handler registration method with a no-op function
+    def _dummy_register_signal_handler(self):
+        pass
+
+    Telemetry._register_signal_handler = _dummy_register_signal_handler
+except ImportError:
+    # If telemetry module is not available, continue without patching
+    pass
 
 from market_analysis_crew import LLM_PROVIDERS, MarketAnalysisCrew, get_available_providers
 
